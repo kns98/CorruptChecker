@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using OfficeOpenXml;
 using OfficeOpenXml.Core.ExcelPackage;
 using PdfSharp.Pdf.IO;
 using SixLabors.ImageSharp;
@@ -13,49 +14,54 @@ namespace FileChecker
         static void Main(string[] args)
         {
             string basePath = args.Length > 0 ? args[0] : "./";
-            List<string> corruptedFiles = SearchFiles(basePath);
-            if (corruptedFiles.Count > 0)
+            List<string> filesToCheck = EnumerateAndFilterFiles(basePath);
+            Console.WriteLine($"Number of files to check: {filesToCheck.Count}");
+
+            if (filesToCheck.Count > 0)
             {
-                ConfirmAndDeleteFiles(corruptedFiles);
+                List<string> corruptedFiles = SearchFiles(filesToCheck);
+                if (corruptedFiles.Count > 0)
+                {
+                    ConfirmAndDeleteFiles(corruptedFiles);
+                }
+                else
+                {
+                    Console.WriteLine("No corrupted files found.");
+                }
             }
             else
             {
-                Console.WriteLine("No corrupted files found.");
+                Console.WriteLine("No files found to check.");
             }
         }
 
-        static List<string> SearchFiles(string basePath)
+        static List<string> EnumerateAndFilterFiles(string basePath)
         {
-            Console.WriteLine($"Checking files in directory: {basePath}");
-            var corruptedFiles = new List<string>();
-
-            var types = new List<(string[] exts, string fileType)>
+            var fileTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                (new[] { ".png", ".jpg", "jpeg" }, "image"),
-                (new[] { ".pdf" }, "pdf"),
-                (new[] { ".xls", ".xlsx", ".xlsm", ".xlsb", ".odf", ".ods", ".odt" }, "excel")
+                ".png", ".jpg", ".jpeg",
+                ".pdf",
+                ".xls", ".xlsx", ".xlsm", ".xlsb", ".odf", ".ods", ".odt"
             };
 
-            foreach (var filePath in Directory.EnumerateFiles(basePath))
+            var files = Directory.EnumerateFiles(basePath, "*.*", SearchOption.AllDirectories)
+                                 .Where(file => fileTypes.Contains(Path.GetExtension(file)))
+                                 .ToList();
+
+            return files;
+        }
+
+        static List<string> SearchFiles(List<string> files)
+        {
+            var corruptedFiles = new List<string>();
+
+            foreach (var filePath in files)
             {
                 Console.WriteLine(new string('-', 30));
                 Console.WriteLine($"Checking file: {filePath}");
 
-                bool? check = null;
-
-                foreach (var option in types)
-                {
-                    if (option.exts.Any(ext => filePath.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        check = CheckFile(filePath, option.fileType);
-                        break;
-                    }
-                }
-
-                if (check == null)
-                {
-                    check = CheckFile(filePath, null);
-                }
+                string fileType = GetFileType(filePath);
+                bool? check = CheckFile(filePath, fileType);
 
                 if (check == false)
                 {
@@ -75,6 +81,18 @@ namespace FileChecker
             return corruptedFiles;
         }
 
+        static string GetFileType(string filePath)
+        {
+            var extension = Path.GetExtension(filePath).ToLowerInvariant();
+            return extension switch
+            {
+                ".png" or ".jpg" or ".jpeg" => "image",
+                ".pdf" => "pdf",
+                ".xls" or ".xlsx" or ".xlsm" or ".xlsb" or ".odf" or ".ods" or ".odt" => "excel",
+                _ => null
+            };
+        }
+
         static bool? CheckFile(string filePath, string fileType)
         {
             bool? check = null;
@@ -88,13 +106,17 @@ namespace FileChecker
                 }
                 else if (fileType == "pdf")
                 {
-                    using var pdf = PdfReader.Open(filePath, PdfDocumentOpenMode.InformationOnly);
+                    using var pdf = PdfReader.Open(filePath, PdfDocumentOpenMode.Import);
                     check = pdf.Info != null;
                 }
                 else if (fileType == "excel")
                 {
                     using var package = new ExcelPackage(new FileInfo(filePath));
                     check = package.Workbook.Worksheets.OfType<object>().Any<object>();
+                }
+                else
+                {
+                    check = null;
                 }
             }
             catch
